@@ -1,21 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/ANGLE Triangle.app"
+APP="$ROOT/build/SpinePreview.app"
 ANGLE="$ROOT/Vendor/ANGLE"
-if [[ ! -f "$ANGLE/lib/libEGL.dylib" ]]; then
-    mkdir -p "$ANGLE"
-    unzip -q "$HOME/Downloads/angle-mac-universal.zip" -d "$ANGLE"
+if [[ ! -f "$ANGLE/lib/libEGL.dylib" || ! -f "$ANGLE/lib/libGLESv2.dylib" ]]; then
+    printf 'Missing bundled ANGLE libraries in %s\n' "$ANGLE/lib" >&2
+    exit 1
 fi
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$ROOT/build/module-cache"
-cp "$ROOT/Sources/Info.plist" "$APP/Contents/Info.plist"
-cp "$ANGLE/lib/libEGL.dylib" "$ANGLE/lib/libGLESv2.dylib" "$APP/Contents/Frameworks/"
-xcrun clang++ "$ROOT/Sources/main.mm" -o "$APP/Contents/MacOS/ANGLETriangle" \
-    -std=c++17 -fobjc-arc -fmodules -fmodules-cache-path="$ROOT/build/module-cache" \
-    -Wall -Wextra -Werror -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 \
-    -I"$ANGLE/include" -L"$ANGLE/lib" -lEGL -lGLESv2 \
-    -framework Cocoa -framework QuartzCore \
-    -Wl,-rpath,@executable_path/../Frameworks
+cmake -S "$ROOT" -B "$ROOT/build/cmake" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+    '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
+cmake --build "$ROOT/build/cmake" --parallel "${BUILD_JOBS:-8}"
+ditto "$ROOT/build/cmake/SpinePreview.app" "$APP"
 for library in libGLESv2.dylib libEGL.dylib; do
     codesign --force --sign - "$APP/Contents/Frameworks/$library"
 done

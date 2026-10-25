@@ -1,0 +1,7 @@
+*.hlsl
+*.metal
+*.spv
+*.tmp.h
+
+# Keep shader sources bundled in the offline source distribution.
+!*.hlsl
