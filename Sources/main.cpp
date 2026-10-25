@@ -9,6 +9,8 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
+#include "SpinePreview.h"
+#include "FileLoader.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -53,15 +55,23 @@ struct Application {
     GLuint program = 0, vertices = 0;
     bool platformReady = false, rendererReady = false, current = false;
     std::string renderer;
-    bool smokeTest = false, running = true, showTriangle = true, showRenderInfo = false;
+    bool smokeTest = false, running = true, showTriangle = false, showRenderInfo = false;
+    std::unique_ptr<SpinePreview> spine;
+    FileLoader files;
+    std::string assetLabel = "Spineboy";
+    bool showPanelForDrop = false;
+    bool playing = true, loop = true;
+    float speed = 1.0f;
+    int animationIndex = 0, skinIndex = 0;
+    unsigned long long sampleHash = 0;
     float scale = 1.0f;
     float background[3] = {0.035f, 0.045f, 0.075f};
-    char input[128] = {};
-    std::string droppedFile = "Drop a file onto this window";
     int frames = 0, initialWidth = 0;
     Uint64 started = 0;
 
     ~Application() {
+        files.cancel();
+        spine.reset();
         if (rendererReady) ImGui_ImplOpenGL3_Shutdown();
         if (platformReady) ImGui_ImplSDL3_Shutdown();
         if (ImGui::GetCurrentContext()) ImGui::DestroyContext();
@@ -84,7 +94,7 @@ struct Application {
     void initialize() {
         check(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
         started = SDL_GetTicks();
-        window = SDL_CreateWindow("SpinePreview", 1100, 720,
+        window = SDL_CreateWindow("SpinePreview3.8", 1100, 720,
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_METAL);
         check(window != nullptr, SDL_GetError());
         check(SDL_SetWindowMinimumSize(window, 760, 480), SDL_GetError());
@@ -160,22 +170,48 @@ struct Application {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
+        ImFontConfig latin;
+        latin.SizePixels = 16;
+        ImGui::GetIO().Fonts->AddFontDefault(&latin);
+        const char *unicodeFont = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
+        if (std::filesystem::exists(unicodeFont)) {
+            ImFontConfig unicode;
+            unicode.MergeMode = true;
+            ImGui::GetIO().Fonts->AddFontFromFileTTF(unicodeFont, 16, &unicode);
+        }
         ImGui::StyleColorsDark();
         // SDL handles input only. No SDL GL context is created.
         platformReady = ImGui_ImplSDL3_InitForOther(window);
         check(platformReady, "ImGui SDL3 initialization failed");
         rendererReady = ImGui_ImplOpenGL3_Init("#version 100");
         check(rendererReady, "ImGui OpenGL ES initialization failed");
+        const char *base = SDL_GetBasePath();
+        check(base != nullptr, SDL_GetError());
+        const auto directory = std::filesystem::path(base)/"spineboy";
+        const auto sample = prepareResources(directory/"spineboy-pro.json", directory/"spineboy.atlas");
+        spine.reset(new SpinePreview(sample));
+        files.loaded(sample);
+        const auto &animations = spine->animations();
+        const auto walk = std::find(animations.begin(), animations.end(), "walk");
+        animationIndex = walk == animations.end() ? 0 : static_cast<int>(walk - animations.begin());
+        std::printf("Spine runtime 3.8 | export %s | %zu animations | %zu skins\n",
+                    spine->version().c_str(), animations.size(), spine->skins().size());
     }
 
     void handleEvent(const SDL_Event &event) {
         ImGui_ImplSDL3_ProcessEvent(&event);
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
             running = false;
-        if (event.type == SDL_EVENT_DROP_FILE && event.drop.data)
-            droppedFile = event.drop.data;
+        if (event.type == SDL_EVENT_DROP_FILE && event.drop.data) {
+            files.drop(event.drop.data);
+            showPanelForDrop = true;
+        }
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_Q &&
             (event.key.mod & SDL_KMOD_GUI)) running = false;
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && (event.key.mod & SDL_KMOD_GUI)) {
+            if (event.key.key == SDLK_O) files.open(window);
+            if (event.key.key == SDLK_R) files.reload();
+        }
     }
 
     // SDL callbacks continue drawing during the native macOS live-resize loop.
@@ -191,6 +227,21 @@ struct Application {
             return SDL_APP_CONTINUE;
         }
         checkEGL(eglMakeCurrent(display, surface, surface, context), "eglMakeCurrent");
+        files.update();
+        if (files.wantsPanel()) showPanelForDrop = true;
+        if (auto resource = files.takeValidated()) {
+            try {
+                auto replacement = std::make_unique<SpinePreview>(*resource);
+                std::string label = resource->skeleton.filename().string();
+                files.loaded(*resource);
+                spine.swap(replacement);
+                assetLabel.swap(label);
+                const auto &names = spine->animations();
+                const auto walk = std::find(names.begin(), names.end(), "walk");
+                animationIndex = walk == names.end() ? 0 : static_cast<int>(walk-names.begin());
+                skinIndex = 0; showTriangle = false; scale = 1; playing = true; loop = true;
+            } catch (const std::exception &e) { files.failed(e.what()); }
+        }
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -202,51 +253,104 @@ struct Application {
             ImGui::EndFrame();
             return SDL_APP_CONTINUE;
         }
-        const int left = static_cast<int>(304 * width / io.DisplaySize.x);
-        const int side = std::min(width - left, height);
-        const int centerX = left + (width - left) / 2;
         ImGui::SetNextWindowPos(ImVec2(12, 12));
-        ImGui::SetNextWindowSize(ImVec2(280, io.DisplaySize.y - 24));
-        ImGui::Begin("SpinePreview", nullptr,
-                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
-        ImGui::TextUnformatted("SDL3 + Dear ImGui + ANGLE");
-        ImGui::TextDisabled("Rendering foundation");
-        ImGui::Separator();
-        ImGui::TextWrapped("%s", renderer.c_str());
-        ImGui::Spacing();
-        ImGui::Checkbox("Show triangle", &showTriangle);
-        ImGui::SliderFloat("Scale", &scale, 0.2f, 1.2f, "%.2fx");
-        ImGui::ColorEdit3("Background", background, ImGuiColorEditFlags_NoInputs);
-        if (ImGui::Button("Reset")) {
-            showTriangle = true;
-            scale = 1.0f;
-            background[0] = 0.035f; background[1] = 0.045f; background[2] = 0.075f;
+        ImGui::SetNextWindowSize(ImVec2(280, io.DisplaySize.y - 24), ImGuiCond_FirstUseEver);
+        // Keep a usable preview area while allowing the panel width to be adjusted.
+        ImGui::SetNextWindowSizeConstraints(ImVec2(240, io.DisplaySize.y - 24),
+            ImVec2(std::min(440.0f, io.DisplaySize.x - 360), io.DisplaySize.y - 24));
+        if (showPanelForDrop) { ImGui::SetNextWindowCollapsed(false); showPanelForDrop = false; }
+        if (smokeTest && frames == 34) ImGui::SetNextWindowCollapsed(true);
+        if (smokeTest && frames == 38) ImGui::SetNextWindowCollapsed(false);
+        const bool panelVisible = ImGui::Begin("SpinePreview3.8", nullptr, ImGuiWindowFlags_NoMove);
+        const bool collapsed = ImGui::IsWindowCollapsed();
+        const ImVec2 panelPosition = ImGui::GetWindowPos();
+        const ImVec2 panelSize = ImGui::GetWindowSize();
+        // A collapsed panel occupies only its title bar. Reserve a strip above
+        // the preview so even that title bar cannot cover the animation.
+        const ImVec2 previewMin = collapsed
+            ? ImVec2(12, panelPosition.y + panelSize.y + 12)
+            : ImVec2(panelPosition.x + panelSize.x + 12, 12);
+        const ImVec2 previewMax(io.DisplaySize.x - 12, io.DisplaySize.y - 12);
+        const int left = static_cast<int>(previewMin.x * width / io.DisplaySize.x);
+        const int top = static_cast<int>(previewMin.y * height / io.DisplaySize.y);
+        const int previewWidth = static_cast<int>((previewMax.x - previewMin.x) * width / io.DisplaySize.x);
+        const int previewHeight = static_cast<int>((previewMax.y - previewMin.y) * height / io.DisplaySize.y);
+        const int side = std::min(previewWidth, previewHeight);
+        const int centerX = left + previewWidth / 2;
+        const int centerY = height - top - previewHeight / 2;
+        if (smokeTest && frames == 34) check(collapsed && previewMin.x == 12, "Panel collapse layout failed");
+        if (smokeTest && frames == 38) check(!collapsed && previewMin.x > panelSize.x, "Panel expansion layout failed");
+        if (panelVisible) {
+            ImGui::TextUnformatted("SDL3 + Dear ImGui + ANGLE");
+            ImGui::Text("Runtime: 3.8 / Export: %s", spine->version().c_str());
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", renderer.c_str());
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", assetLabel.c_str());
+            const auto &animations = spine->animations();
+            if (!animations.empty() && ImGui::BeginCombo("Animation", animations[animationIndex].c_str())) {
+                for (size_t i = 0; i < animations.size(); ++i) {
+                    if (ImGui::Selectable(animations[i].c_str(), static_cast<int>(i) == animationIndex)) {
+                        animationIndex = static_cast<int>(i);
+                        spine->setAnimation(animationIndex, loop);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (animations.empty()) ImGui::TextDisabled("No animations: setup pose");
+            const auto &skins = spine->skins();
+            if (!skins.empty() && ImGui::BeginCombo("Skin", skins[skinIndex].c_str())) {
+                for (size_t i = 0; i < skins.size(); ++i) {
+                    if (ImGui::Selectable(skins[i].c_str(), static_cast<int>(i) == skinIndex)) {
+                        skinIndex = static_cast<int>(i);
+                        spine->setSkin(skinIndex);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Checkbox("Playing", &playing);
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Loop", &loop)) spine->setAnimation(animationIndex, loop);
+            ImGui::SliderFloat("Speed", &speed, 0.0f, 2.0f, "%.2fx");
+            if (ImGui::Button("Restart")) spine->setAnimation(animationIndex, loop);
+            ImGui::SameLine();
+            ImGui::Text("%.2f s", spine->time());
+            ImGui::Checkbox("Triangle test", &showTriangle);
+            ImGui::SliderFloat("Scale", &scale, 0.2f, 1.2f, "%.2fx");
+            ImGui::ColorEdit3("Background", background, ImGuiColorEditFlags_NoInputs);
+            if (ImGui::Button("Reset")) {
+                showTriangle = false;
+                scale = 1.0f;
+                background[0] = 0.035f; background[1] = 0.045f; background[2] = 0.075f;
+            }
+            ImGui::Separator();
+            files.draw(window);
+            ImGui::Separator();
+            ImGui::Checkbox("Show render info", &showRenderInfo);
+            if (showRenderInfo) {
+                ImGui::Text("Window: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
+                ImGui::Text("Framebuffer: %d x %d px", width, height);
+                ImGui::Text("Pixel scale: %.2f x %.2f", width / io.DisplaySize.x, height / io.DisplaySize.y);
+                ImGui::Text("Preview: %d x %d px", previewWidth, previewHeight);
+                ImGui::Text("Viewport: %d x %d px", showTriangle ? side : previewWidth,
+                            showTriangle ? side : previewHeight);
+                ImGui::TextDisabled("Updates while resizing");
+            }
+            ImGui::Separator();
+            ImGui::Text("%.1f FPS", io.Framerate);
+            ImGui::Text("SDL %d / ImGui %s", SDL_GetVersion(), IMGUI_VERSION);
         }
-        ImGui::Separator();
-        ImGui::InputTextWithHint("##input", "Input test", input, sizeof(input));
-        ImGui::TextWrapped("%s", droppedFile.c_str());
-        ImGui::Separator();
-        ImGui::Checkbox("Show render info", &showRenderInfo);
-        if (showRenderInfo) {
-            ImGui::Text("Window: %.0f x %.0f", io.DisplaySize.x, io.DisplaySize.y);
-            ImGui::Text("Framebuffer: %d x %d px", width, height);
-            ImGui::Text("Pixel scale: %.2f x %.2f", width / io.DisplaySize.x, height / io.DisplaySize.y);
-            ImGui::Text("Preview: %d x %d px", width - left, height);
-            ImGui::Text("Viewport: %d x %d px", side, side);
-            ImGui::TextDisabled("Updates while resizing");
-        }
-        ImGui::Separator();
-        ImGui::Text("%.1f FPS", io.Framerate);
-        ImGui::Text("SDL %d / ImGui %s", SDL_GetVersion(), IMGUI_VERSION);
-        ImGui::TextDisabled("Spine runtime not loaded");
         ImGui::End();
+        spine->update(playing ? (smokeTest ? 1.0f / 60.0f : std::min(io.DeltaTime, 0.1f)) * speed : 0.0f);
+        if (!showTriangle)
+            spine->draw(ImGui::GetBackgroundDrawList(), previewMin, previewMax, scale);
         ImGui::Render();
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_BLEND);
         glViewport(0, 0, width, height);
         glClearColor(background[0], background[1], background[2], 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        glViewport(centerX - side / 2, (height - side) / 2, side, side);
+        glViewport(centerX - side / 2, centerY - side / 2, side, side);
         if (showTriangle) {
             glUseProgram(program);
             glUniform1f(glGetUniformLocation(program, "scale"), scale);
@@ -261,9 +365,10 @@ struct Application {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         if (smokeTest && (frames == 10 || frames == 30)) {
             GLubyte center[4] = {}, corner[4] = {}, panel[4] = {};
-            glReadPixels(centerX, height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
+            glReadPixels(centerX, centerY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
             glReadPixels(width - 3, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, corner);
-            const int panelX = static_cast<int>(30 * width / io.DisplaySize.x);
+            // Sample the panel's empty left margin, independent of control layout.
+            const int panelX = static_cast<int>((panelPosition.x + 3) * width / io.DisplaySize.x);
             glReadPixels(panelX, height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, panel);
             check(center[0] > 50 && center[1] > 50 && center[2] > 50, "Triangle pixel check failed");
             check(corner[0] < 20 && corner[1] < 20 && corner[2] < 30, "Background pixel check failed");
@@ -274,12 +379,28 @@ struct Application {
             std::printf("Pixel check OK: %dx%d, triangle=(%u,%u,%u), ImGui=(%u,%u,%u)\n",
                         width, height, center[0], center[1], center[2], panel[0], panel[1], panel[2]);
         }
+        if (smokeTest && (frames == 45 || frames == 60)) {
+            std::vector<unsigned char> pixels(static_cast<size_t>(previewWidth) * previewHeight * 4);
+            glReadPixels(left, height - top - previewHeight, previewWidth, previewHeight,
+                         GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            size_t visible = 0;
+            unsigned long long hash = 1469598103934665603ULL;
+            for (size_t i = 0; i < pixels.size(); i += 4) {
+                if (pixels[i] > 30 || pixels[i + 1] > 30 || pixels[i + 2] > 30) ++visible;
+                hash = (hash ^ pixels[i]) * 1099511628211ULL;
+            }
+            check(visible > 1000, "Spine textured geometry pixel check failed");
+            if (frames == 45) sampleHash = hash;
+            else check(hash != sampleHash, "Spine animation did not change the framebuffer");
+            std::printf("Spine sample check OK: %zu visible pixels, animation time %.2f s\n", visible, spine->time());
+        }
         check(glGetError() == GL_NO_ERROR, "OpenGL ES rendering error");
         checkEGL(eglSwapBuffers(display, surface), "eglSwapBuffers");
         ++frames;
         if (smokeTest && frames == 12) check(SDL_SetWindowSize(window, 900, 600), SDL_GetError());
-        if (smokeTest && frames == 32) {
-            std::puts("PASS: SDL3 window/events, ANGLE Metal, triangle, ImGui panel, resize, swap.");
+        if (smokeTest && frames == 32) showTriangle = false;
+        if (smokeTest && frames == 64) {
+            std::puts("PASS: SDL3, ANGLE Metal, triangle, ImGui, resize, Spine 3.8 textured animation.");
             return SDL_APP_SUCCESS;
         }
         SDL_Delay(1);
@@ -295,13 +416,17 @@ static SDL_AppResult reportError(Application *app, const std::exception &error) 
 }
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
+    if (argc > 1 && std::strcmp(argv[1], "--validate-resource") == 0)
+        return validateResourceArguments(argc, argv) == 0 ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
     Application *app = nullptr;
     try {
         app = new Application;
         *appstate = app;
         app->smokeTest = argc > 1 && std::strcmp(argv[1], "--smoke-test") == 0;
         app->showRenderInfo = app->smokeTest;
+        app->showTriangle = app->smokeTest;
         app->initialize();
+        if (argc > 1 && !app->smokeTest) for (int i = 1; i < argc; ++i) app->files.drop(argv[i]);
         return SDL_APP_CONTINUE;
     } catch (const std::exception &error) {
         return reportError(app, error);
