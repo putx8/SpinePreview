@@ -13,7 +13,8 @@ if [[ ! -f "$ANGLE/lib/libEGL.dylib" || ! -f "$ANGLE/lib/libGLESv2.dylib" ]]; th
     exit 1
 fi
 cmake -S "$ROOT" -B "$ROOT/build/cmake" \
-    -DSPINE_VERSION="$VERSION" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+    -DSPINE_VERSION="$VERSION" -DSPINE_RELEASE_VERSION="${SPINE_RELEASE_VERSION:-1.0.0}" \
+    -DSPINE_BUILD_NUMBER="${SPINE_BUILD_NUMBER:-1}" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
     '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
 cmake --build "$ROOT/build/cmake" --parallel "${BUILD_JOBS:-8}"
 for version in "${VERSIONS[@]}"; do

@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  build:
+    name: Build macOS Universal applications
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the release tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/release.py metadata "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Test release tooling
+        run: python3 -m unittest discover -s tests -p 'release_tests.py' -v
+      - name: Configure resource regression tests
+        run: cmake -S . -B build/cmake -DSPINE_BUILD_TESTS=ON
+      - name: Build and sign both runtime applications
+        env:
+          SPINE_VERSION: all
+          SPINE_RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SPINE_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash scripts/build.sh
+      - name: Run resource regression tests
+        run: ctest --test-dir build/cmake --output-on-failure
+      - name: Package applications and offline source
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: python3 scripts/release.py package --tag "$RELEASE_TAG" --revision "$RELEASE_COMMIT" --output build/release
+      - name: Preserve the complete release package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ github.ref_name }}-${{ github.run_attempt }}
+          path: build/release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download the verified release package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ github.ref_name }}-${{ github.run_attempt }}
+          path: build/release
+      - name: Upload all assets and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/publish-release.sh "$RELEASE_TAG" build/release

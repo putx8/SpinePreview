@@ -1,5 +1,7 @@
 # 项目初衷
 
+https://en.esotericsoftware.com/spine-skeleton-viewer#Download
+
 在 Apple Silicon Mac 上运行旧版 Spine Skeleton Viewer 时，Java 应用依赖的 libGDX 原生动态库无法加载，预览器在启动阶段退出。这是创建 SpinePreview 的直接原因。
 
 下面记录实际遇到的两个版本的报错。命令中的下载目录统一替换为 `<DOWNLOADS>`；系统临时目录、用户名相关缓存目录及缓存标识统一替换为 `<TEMP_DIR>/libgdx/<CACHE_ID>`。保留动态库文件名、目标架构及关键调用链，省略重复堆栈。
