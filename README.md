@@ -66,6 +66,10 @@ Spine 2.1.25 的 C runtime 离线保存在 `Vendor/Spine21/`，固定提交 `142
 
 两个应用共用 `main.cpp`、`FileLoader.*`、`ResourceFiles.*` 和纹理加载器。`SpinePreview.h` 定义统一接口，构建时选择 `Sources/Runtimes/Spine21.cpp` 或 `Spine38.cpp`；每个应用只链接自己的 runtime，分别打包对应示例与许可证。多版本维护及接入差异见 [runtime 版本方案](docs/runtime-versions.md)。
 
+## 应用图标
+
+两个 runtime 应用共用骨骼关节与播放符号图标。资源保存在 `Assets/AppIcon/`：原始生成图、1024×1024 PNG、完整尺寸的 macOS ICNS 和生成提示词。构建直接使用仓库中的 ICNS；更换原图后可运行 `bash scripts/build-icon.sh` 通过 macOS 系统工具重新生成，无需在线生成服务。
+
 ## GitHub 自动发布
 
 推送 `v1.0.0` 这类版本 tag 后，GitHub Actions 自动构建并发布 `SpinePreview2.1`、`SpinePreview3.8` 的 macOS Universal ZIP，以及包含离线依赖的 ZIP / TAR.GZ 源码包和 SHA-256 校验文件。预发布 tag（如 `v1.1.0-rc.1`）生成 Prerelease。详细设置、发布步骤与失败重试见 [发布文档](docs/releasing.md)。

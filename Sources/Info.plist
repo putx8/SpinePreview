@@ -5,6 +5,7 @@
     <key>CFBundleIdentifier</key><string>@SPINE_BUNDLE_ID@</string>
     <key>CFBundleName</key><string>@SPINE_APP_NAME@</string>
     <key>CFBundleDisplayName</key><string>@SPINE_APP_NAME@</string>
+    <key>CFBundleIconFile</key><string>AppIcon.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>@SPINE_BUNDLE_VERSION@</string>
     <key>CFBundleVersion</key><string>@SPINE_BUILD_NUMBER@</string>
