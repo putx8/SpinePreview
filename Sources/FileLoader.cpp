@@ -165,6 +165,9 @@ FileLoader::~FileLoader() { cancel(); }
 void FileLoader::cancel() { impl->cancel(); }
 void FileLoader::open(SDL_Window *window) { impl->openDialog(window, false, false); }
 bool FileLoader::wantsPanel() { const bool attention = impl->attention; impl->attention = false; return attention; }
+bool FileLoader::isCurrent(const ResourceFiles &files) const {
+    return impl->current && impl->current->skeleton == files.skeleton && impl->current->atlas == files.atlas;
+}
 void FileLoader::reload() {
     auto &s = *impl;
     if (!s.current) return;
@@ -213,6 +216,25 @@ void FileLoader::update() {
 }
 void FileLoader::draw(SDL_Window *window) {
     auto &s = *impl;
+    if (s.current) {
+        const bool allPma = std::all_of(s.current->pages.begin(), s.current->pages.end(),
+                                      [](const auto &page) { return page.premultiplied; });
+        const bool anyPma = std::any_of(s.current->pages.begin(), s.current->pages.end(),
+                                      [](const auto &page) { return page.premultiplied; });
+        bool pma = allPma;
+        ImGui::BeginDisabled(s.process != nullptr);
+        if (ImGui::Checkbox("Premultiplied alpha (PMA)", &pma)) {
+            put(s.skeletonPath, s.current->skeleton.string());
+            put(s.atlasPath, s.current->atlas.string());
+            s.overrides = s.current->pages;
+            s.alpha = pma ? AlphaMode::Premultiplied : AlphaMode::Straight;
+            s.start();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Enable for PMA textures; disable for straight-alpha textures.\nReloads the current textures. Auto mode is available in Resource details.");
+        ImGui::EndDisabled();
+        if (anyPma && !allPma) ImGui::TextDisabled("Auto: mixed alpha across pages");
+    }
     if (ImGui::Button("Open files...")) s.openDialog(window, false, false);
     ImGui::SameLine();
     if (ImGui::Button("Folder...")) s.openDialog(window, true, false);

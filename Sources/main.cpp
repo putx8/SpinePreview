@@ -232,14 +232,32 @@ struct Application {
         if (auto resource = files.takeValidated()) {
             try {
                 auto replacement = std::make_unique<SpinePreview>(*resource);
+                const bool sameAsset = files.isCurrent(*resource);
+                int nextAnimation = 0, nextSkin = 0;
+                const auto &names = replacement->animations();
+                const auto walk = std::find(names.begin(), names.end(), "walk");
+                if (walk != names.end()) nextAnimation = static_cast<int>(walk-names.begin());
+                if (sameAsset) {
+                    const auto &oldAnimations = spine->animations();
+                    if (!oldAnimations.empty()) {
+                        const auto found = std::find(names.begin(), names.end(), oldAnimations[animationIndex]);
+                        if (found != names.end()) nextAnimation = static_cast<int>(found-names.begin());
+                    }
+                    const auto &skins = replacement->skins();
+                    if (!spine->skins().empty()) {
+                        const auto found = std::find(skins.begin(), skins.end(), spine->skins()[skinIndex]);
+                        if (found != skins.end()) nextSkin = static_cast<int>(found-skins.begin());
+                    }
+                    replacement->setAnimation(nextAnimation, loop);
+                    replacement->setSkin(nextSkin);
+                    replacement->setTime(spine->time());
+                }
                 std::string label = resource->skeleton.filename().string();
                 files.loaded(*resource);
                 spine.swap(replacement);
                 assetLabel.swap(label);
-                const auto &names = spine->animations();
-                const auto walk = std::find(names.begin(), names.end(), "walk");
-                animationIndex = walk == names.end() ? 0 : static_cast<int>(walk-names.begin());
-                skinIndex = 0; showTriangle = false; scale = 1; playing = true; loop = true;
+                animationIndex = nextAnimation; skinIndex = nextSkin;
+                if (!sameAsset) { showTriangle = false; scale = 1; playing = true; loop = true; }
             } catch (const std::exception &e) { files.failed(e.what()); }
         }
         ImGui_ImplOpenGL3_NewFrame();

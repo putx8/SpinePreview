@@ -21,6 +21,7 @@ public:
     const std::vector<std::string> &skins() const;
     const std::string &version() const;
     float time() const;
+    void setTime(float time);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

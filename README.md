@@ -28,6 +28,7 @@ open "build/SpinePreview3.8.app"
 - `Triangle test` 可切换回三角形渲染测试；支持缩放、背景颜色调整、一键重置。
 - `Show render info` 开关：显示窗口逻辑尺寸、帧缓冲像素尺寸、像素比例、预览区和实际三角形 viewport 尺寸。使用 SDL3 主循环回调，拖动窗口边缘调整大小时也会持续更新渲染和信息。
 - `Open files...`、`Folder...`、文件拖入、⌘O 打开文件、⌘R / `Reload` 重新加载。
+- 主面板的 `Premultiplied alpha (PMA)` 开关：开启按预乘纹理解码，关闭按 straight alpha 解码，切换后重新加载当前纹理，保留动画、皮肤、播放时间、暂停状态及视图缩放。失败时保留原预览。自动识别模式仍可在 `Resource details...` 中选择；自动模式下多页混合使用不同 alpha 时会显示说明。
 - 实际 GL renderer、SDL / ImGui 版本、FPS 显示。
 
 界面使用英文，macOS 上合并系统 Arial Unicode 字体显示资源名称；输入法尚未完整验证。渲染器已接入 Region、Mesh、裁剪附件，以及 Normal / Additive / Multiply / Screen 混合。双颜色 tint 尚未接入。

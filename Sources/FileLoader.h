@@ -18,6 +18,7 @@ public:
     void open(SDL_Window *window);
     void reload();
     bool wantsPanel();
+    bool isCurrent(const ResourceFiles &files) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

@@ -194,6 +194,14 @@ const std::vector<std::string> &SpinePreview::animations() const { return impl->
 const std::vector<std::string> &SpinePreview::skins() const { return impl->skins; }
 const std::string &SpinePreview::version() const { return impl->version; }
 float SpinePreview::time() const { auto *track = impl->state->getCurrent(0); return track ? track->getTrackTime() : 0; }
+void SpinePreview::setTime(float time) {
+    if (auto *track = impl->state->getCurrent(0)) {
+        track->setTrackTime(std::max(0.0f, time));
+        track->setMixDuration(0);
+        impl->state->apply(*impl->skeleton);
+        impl->skeleton->updateWorldTransform();
+    }
+}
 void SpinePreview::setAnimation(int index, bool loop) {
     if (index < 0 || static_cast<size_t>(index) >= impl->animations.size()) return;
     impl->state->setAnimation(0, impl->data->getAnimations()[static_cast<size_t>(index)], loop);
