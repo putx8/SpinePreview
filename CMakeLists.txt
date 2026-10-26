@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 project(SpinePreview LANGUAGES C CXX OBJCXX)
-set(SPINE_VERSION "3.8" CACHE STRING "Spine runtime version")
-if(NOT SPINE_VERSION STREQUAL "3.8")
-    message(FATAL_ERROR "Only the bundled Spine 3.8 runtime is integrated in this build.")
+set(SPINE_VERSION "all" CACHE STRING "Spine runtime to build: all, 2.1, or 3.8")
+set_property(CACHE SPINE_VERSION PROPERTY STRINGS all 2.1 3.8)
+if(NOT SPINE_VERSION MATCHES "^(all|2\\.1|3\\.8)$")
+    message(FATAL_ERROR "SPINE_VERSION must be all, 2.1, or 3.8")
 endif()
-set(SPINE_APP_NAME "SpinePreview${SPINE_VERSION}")
 if(NOT APPLE)
     message(FATAL_ERROR "This first build uses macOS ANGLE libraries. Windows/Linux integration is not implemented yet.")
 endif()
@@ -38,45 +38,82 @@ target_include_directories(imgui PUBLIC "${CMAKE_SOURCE_DIR}/Sources")
 target_compile_definitions(imgui PRIVATE IMGUI_IMPL_OPENGL_ES2)
 target_compile_definitions(imgui PUBLIC IMGUI_USER_CONFIG="SpineImGuiConfig.h")
 target_link_libraries(imgui PUBLIC SDL3::SDL3-static ANGLE_GLESv2)
-set(SPINE_DIR "${CMAKE_SOURCE_DIR}/Vendor/Spine38/spine-cpp/spine-cpp")
-file(GLOB SPINE_SOURCES CONFIGURE_DEPENDS "${SPINE_DIR}/src/spine/*.cpp")
-add_library(spine38 STATIC ${SPINE_SOURCES})
-target_include_directories(spine38 SYSTEM PUBLIC "${SPINE_DIR}/include")
-target_compile_features(spine38 PUBLIC cxx_std_11)
-add_library(resource_files STATIC Sources/ResourceFiles.mm)
-set_source_files_properties(Sources/ResourceFiles.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-target_include_directories(resource_files PUBLIC "${CMAKE_SOURCE_DIR}/Sources")
-target_compile_features(resource_files PUBLIC cxx_std_17)
-target_link_libraries(resource_files PUBLIC "-framework Foundation" "-framework ImageIO")
-add_executable(SpinePreview MACOSX_BUNDLE Sources/main.cpp Sources/SpinePreview.cpp Sources/FileLoader.cpp)
-target_compile_features(SpinePreview PRIVATE cxx_std_17)
-target_compile_options(SpinePreview PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(SpinePreview PRIVATE imgui ANGLE_EGL spine38 resource_files "-framework CoreGraphics")
-set_target_properties(SpinePreview PROPERTIES
-    OUTPUT_NAME "${SPINE_APP_NAME}"
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Sources/Info.plist"
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "@executable_path/../Frameworks")
-add_custom_command(TARGET SpinePreview POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Frameworks"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${ANGLE_DIR}/lib/libEGL.dylib" "${ANGLE_DIR}/lib/libGLESv2.dylib"
-        "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Frameworks"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Resources/Licenses"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${SDL3_SOURCE_DIR}/LICENSE.txt"
-        "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Resources/Licenses/SDL3.txt"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${imgui_SOURCE_DIR}/LICENSE.txt"
-        "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Resources/Licenses/DearImGui.txt"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/Vendor/Spine38/LICENSE"
-        "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Resources/Licenses/Spine.txt"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/Vendor/Spine38/examples/spineboy/export"
-        "$<TARGET_BUNDLE_DIR:SpinePreview>/Contents/Resources/spineboy")
-
+set_source_files_properties(Sources/AppProcess.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 option(SPINE_BUILD_TESTS "Build resource loading regression tests" OFF)
 if(SPINE_BUILD_TESTS)
     enable_testing()
-    add_executable(resource_files_tests tests/resource_files_tests.cpp)
-    target_link_libraries(resource_files_tests PRIVATE resource_files SDL3::SDL3-static)
-    add_test(NAME resource_files COMMAND resource_files_tests
-        "${CMAKE_SOURCE_DIR}/Vendor/Spine38/examples/spineboy/export" "$<TARGET_FILE:SpinePreview>")
+endif()
+
+function(add_spine_preview version suffix adapter runtime_dir sample_dir sample_json)
+    set(SPINE_APP_NAME "SpinePreview${version}")
+    set(SPINE_BUNDLE_ID "local.spinepreview.v${suffix}")
+    if(version STREQUAL "3.8")
+        set(target SpinePreview)
+        set(resources resource_files)
+        file(GLOB runtime_sources CONFIGURE_DEPENDS "${runtime_dir}/src/spine/*.cpp")
+    else()
+        set(target SpinePreview21)
+        set(resources resource_files21)
+        file(GLOB runtime_sources CONFIGURE_DEPENDS "${runtime_dir}/src/spine/*.c")
+    endif()
+    add_library(spine${suffix} STATIC ${runtime_sources})
+    target_include_directories(spine${suffix} SYSTEM PUBLIC "${runtime_dir}/include")
+    if(version STREQUAL "3.8")
+        target_compile_features(spine${suffix} PUBLIC cxx_std_11)
+    endif()
+    add_library(${resources} STATIC Sources/ResourceFiles.mm)
+    target_compile_options(${resources} PRIVATE -fobjc-arc)
+    target_include_directories(${resources} PUBLIC "${CMAKE_SOURCE_DIR}/Sources")
+    target_compile_features(${resources} PUBLIC cxx_std_17)
+    target_compile_definitions(${resources} PUBLIC SPINE_RUNTIME_VERSION="${version}")
+    target_link_libraries(${resources} PUBLIC "-framework Foundation" "-framework ImageIO")
+    add_executable(${target} MACOSX_BUNDLE Sources/main.cpp Sources/FileLoader.cpp Sources/AppProcess.mm
+        Sources/PreviewTexture.cpp "Sources/Runtimes/${adapter}.cpp")
+    target_compile_features(${target} PRIVATE cxx_std_17)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+    target_compile_definitions(${target} PRIVATE SPINE_APP_NAME="${SPINE_APP_NAME}" SPINE_SAMPLE_JSON="${sample_json}")
+    target_link_libraries(${target} PRIVATE imgui ANGLE_EGL spine${suffix} ${resources} "-framework CoreGraphics" "-framework AppKit")
+    configure_file("${CMAKE_SOURCE_DIR}/Sources/Info.plist"
+        "${CMAKE_CURRENT_BINARY_DIR}/Info${suffix}.plist" @ONLY)
+    set_target_properties(${target} PROPERTIES
+        OUTPUT_NAME "${SPINE_APP_NAME}"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info${suffix}.plist"
+        BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "@executable_path/../Frameworks")
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:${target}>/Contents/Frameworks"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${ANGLE_DIR}/lib/libEGL.dylib" "${ANGLE_DIR}/lib/libGLESv2.dylib"
+            "$<TARGET_BUNDLE_DIR:${target}>/Contents/Frameworks"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_DIR:${target}>/Contents/Resources/Licenses"
+        COMMAND "${CMAKE_COMMAND}" -E copy "${SDL3_SOURCE_DIR}/LICENSE.txt"
+            "$<TARGET_BUNDLE_DIR:${target}>/Contents/Resources/Licenses/SDL3.txt"
+        COMMAND "${CMAKE_COMMAND}" -E copy "${imgui_SOURCE_DIR}/LICENSE.txt"
+            "$<TARGET_BUNDLE_DIR:${target}>/Contents/Resources/Licenses/DearImGui.txt"
+        COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/Vendor/Spine${suffix}/LICENSE"
+            "$<TARGET_BUNDLE_DIR:${target}>/Contents/Resources/Licenses/Spine.txt"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${sample_dir}"
+            "$<TARGET_BUNDLE_DIR:${target}>/Contents/Resources/spineboy")
+    if(SPINE_BUILD_TESTS)
+        if(version STREQUAL "3.8")
+            add_executable(resource_files_tests tests/resource_files_tests.cpp)
+            target_link_libraries(resource_files_tests PRIVATE ${resources} SDL3::SDL3-static)
+            add_test(NAME resource_files COMMAND resource_files_tests "${sample_dir}" "$<TARGET_FILE:${target}>")
+        else()
+            add_executable(runtime21_tests tests/runtime21_tests.cpp)
+            target_compile_definitions(runtime21_tests PRIVATE SPINE_APP_NAME="${SPINE_APP_NAME}")
+            target_link_libraries(runtime21_tests PRIVATE ${resources} SDL3::SDL3-static)
+            add_test(NAME runtime21 COMMAND runtime21_tests "${sample_dir}" "$<TARGET_FILE:${target}>"
+                "${CMAKE_SOURCE_DIR}/Vendor/Spine21/spine-cocos2dx/3/example/Resources/common")
+        endif()
+    endif()
+endfunction()
+if(SPINE_VERSION STREQUAL "all" OR SPINE_VERSION STREQUAL "3.8")
+    add_spine_preview("3.8" "38" "Spine38"
+        "${CMAKE_SOURCE_DIR}/Vendor/Spine38/spine-cpp/spine-cpp"
+        "${CMAKE_SOURCE_DIR}/Vendor/Spine38/examples/spineboy/export" "spineboy-pro.json")
+endif()
+if(SPINE_VERSION STREQUAL "all" OR SPINE_VERSION STREQUAL "2.1")
+    add_spine_preview("2.1" "21" "Spine21"
+        "${CMAKE_SOURCE_DIR}/Vendor/Spine21/spine-c"
+        "${CMAKE_SOURCE_DIR}/Vendor/Spine21/spine-c/data" "spineboy.json")
 endif()

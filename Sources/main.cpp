@@ -11,8 +11,12 @@
 #include "imgui_impl_opengl3.h"
 #include "SpinePreview.h"
 #include "FileLoader.h"
+#include "AppProcess.h"
 #include <algorithm>
 #include <cstdio>
+#include <cmath>
+#include <charconv>
+#include <optional>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -59,15 +63,22 @@ struct Application {
     std::unique_ptr<SpinePreview> spine;
     FileLoader files;
     std::string assetLabel = "Spineboy";
+    std::filesystem::path smokeSkeleton, smokeAtlas;
+    std::optional<std::pair<int, int>> initialPosition;
+    int windowWidth = 1136, windowHeight = 640;
     bool showPanelForDrop = false;
     bool playing = true, loop = true;
     float speed = 1.0f;
     int animationIndex = 0, skinIndex = 0;
     unsigned long long sampleHash = 0;
     float scale = 1.0f;
+    ImVec2 pan{0, 0};
+    ImVec2 dragStartPan{0, 0};
+    bool draggingPreview = false;
     float background[3] = {0.035f, 0.045f, 0.075f};
     int frames = 0, initialWidth = 0;
     Uint64 started = 0;
+    Uint32 newInstanceEvent = 0;
 
     ~Application() {
         files.cancel();
@@ -94,10 +105,23 @@ struct Application {
     void initialize() {
         check(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
         started = SDL_GetTicks();
-        window = SDL_CreateWindow("SpinePreview3.8", 1100, 720,
-            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_METAL);
+        newInstanceEvent = SDL_RegisterEvents(1);
+        check(newInstanceEvent != 0, "Cannot register the new-instance event");
+        installApplicationMenu(newInstanceEvent);
+        window = SDL_CreateWindow(SPINE_APP_NAME, windowWidth, windowHeight,
+            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_METAL | SDL_WINDOW_HIDDEN);
         check(window != nullptr, SDL_GetError());
         check(SDL_SetWindowMinimumSize(window, 760, 480), SDL_GetError());
+        if (initialPosition) {
+            SDL_Rect desired{initialPosition->first, initialPosition->second, windowWidth, windowHeight}, usable{};
+            const auto displayID = SDL_GetDisplayForRect(&desired);
+            if (displayID && SDL_GetDisplayUsableBounds(displayID, &usable)) {
+                desired.x = std::clamp(desired.x, usable.x, usable.x+std::max(0, usable.w-desired.w));
+                desired.y = std::clamp(desired.y, usable.y, usable.y+std::max(0, usable.h-desired.h));
+            }
+            check(SDL_SetWindowPosition(window, desired.x, desired.y), SDL_GetError());
+        }
+        check(SDL_ShowWindow(window), SDL_GetError());
         metalView = SDL_Metal_CreateView(window);
         check(metalView != nullptr, SDL_GetError());
         auto getDisplay = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
@@ -188,18 +212,40 @@ struct Application {
         const char *base = SDL_GetBasePath();
         check(base != nullptr, SDL_GetError());
         const auto directory = std::filesystem::path(base)/"spineboy";
-        const auto sample = prepareResources(directory/"spineboy-pro.json", directory/"spineboy.atlas");
+        const auto sample = prepareResources(smokeSkeleton.empty() ? directory/SPINE_SAMPLE_JSON : smokeSkeleton,
+                                             smokeAtlas.empty() ? directory/"spineboy.atlas" : smokeAtlas);
         spine.reset(new SpinePreview(sample));
         files.loaded(sample);
         const auto &animations = spine->animations();
         const auto walk = std::find(animations.begin(), animations.end(), "walk");
         animationIndex = walk == animations.end() ? 0 : static_cast<int>(walk - animations.begin());
-        std::printf("Spine runtime 3.8 | export %s | %zu animations | %zu skins\n",
+        if (smokeTest) {
+            for (size_t i = 0; i < spine->skins().size(); ++i) { spine->setSkin(static_cast<int>(i)); spine->update(0); }
+            for (size_t i = 0; i < animations.size(); ++i) { spine->setAnimation(static_cast<int>(i), true); spine->update(0.1f); }
+            if (!animations.empty()) {
+                spine->setAnimation(animationIndex, true); spine->setSkin(0); spine->setTime(0.25f);
+                check(std::fabs(spine->time()-0.25f) < 0.001f, "Runtime seek check failed");
+                spine->update(0);
+                check(std::fabs(spine->time()-0.25f) < 0.001f, "Runtime pause check failed");
+                spine->setAnimation(animationIndex, false); spine->update(100);
+                const float endTime = spine->time(); spine->update(0);
+                check(endTime > 0 && spine->time() == endTime, "Runtime end-pose check failed");
+                spine->setAnimation(animationIndex, true); spine->setTime(0);
+            }
+        }
+        std::printf("Spine runtime " SPINE_RUNTIME_VERSION " | export %s | %zu animations | %zu skins\n",
                     spine->version().c_str(), animations.size(), spine->skins().size());
     }
 
+    void openNewInstance() {
+        std::string error;
+        if (!launchNewApplication(window, error)) files.failed("Cannot open a new instance: " + error);
+    }
+
     void handleEvent(const SDL_Event &event) {
+        if (event.type == newInstanceEvent) { openNewInstance(); return; }
         ImGui_ImplSDL3_ProcessEvent(&event);
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) draggingPreview = false;
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
             running = false;
         if (event.type == SDL_EVENT_DROP_FILE && event.drop.data) {
@@ -228,6 +274,8 @@ struct Application {
         }
         checkEGL(eglMakeCurrent(display, surface, surface, context), "eglMakeCurrent");
         files.update();
+        if (auto error = takeApplicationLaunchError(); !error.empty())
+            files.failed("Cannot open a new instance: " + error);
         if (files.wantsPanel()) showPanelForDrop = true;
         if (auto resource = files.takeValidated()) {
             try {
@@ -257,11 +305,19 @@ struct Application {
                 spine.swap(replacement);
                 assetLabel.swap(label);
                 animationIndex = nextAnimation; skinIndex = nextSkin;
-                if (!sameAsset) { showTriangle = false; scale = 1; playing = true; loop = true; }
+                if (!sameAsset) { showTriangle = false; scale = 1; pan = ImVec2(0, 0); draggingPreview = false; playing = true; loop = true; }
             } catch (const std::exception &e) { files.failed(e.what()); }
         }
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        if (smokeTest) {
+            auto &input = ImGui::GetIO();
+            input.ConfigInputTrickleEventQueue = false;
+            if (frames >= 40 && frames <= 43) input.AddMousePosEvent(frames < 42 ? 650 : 730, frames < 42 ? 300 : 340);
+            if (frames == 41) input.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            if (frames == 42) input.AddMousePosEvent(730, 340);
+            if (frames == 43) input.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        }
         ImGui::NewFrame();
         const ImGuiIO &io = ImGui::GetIO();
         EGLint width = 0, height = 0;
@@ -279,7 +335,7 @@ struct Application {
         if (showPanelForDrop) { ImGui::SetNextWindowCollapsed(false); showPanelForDrop = false; }
         if (smokeTest && frames == 34) ImGui::SetNextWindowCollapsed(true);
         if (smokeTest && frames == 38) ImGui::SetNextWindowCollapsed(false);
-        const bool panelVisible = ImGui::Begin("SpinePreview3.8", nullptr, ImGuiWindowFlags_NoMove);
+        const bool panelVisible = ImGui::Begin(SPINE_APP_NAME, nullptr, ImGuiWindowFlags_NoMove);
         const bool collapsed = ImGui::IsWindowCollapsed();
         const ImVec2 panelPosition = ImGui::GetWindowPos();
         const ImVec2 panelSize = ImGui::GetWindowSize();
@@ -299,8 +355,9 @@ struct Application {
         if (smokeTest && frames == 34) check(collapsed && previewMin.x == 12, "Panel collapse layout failed");
         if (smokeTest && frames == 38) check(!collapsed && previewMin.x > panelSize.x, "Panel expansion layout failed");
         if (panelVisible) {
+            if (ImGui::Button("New instance (Cmd+N)")) openNewInstance();
             ImGui::TextUnformatted("SDL3 + Dear ImGui + ANGLE");
-            ImGui::Text("Runtime: 3.8 / Export: %s", spine->version().c_str());
+            ImGui::Text("Runtime: " SPINE_RUNTIME_VERSION " / Export: %s", spine->version().c_str());
             ImGui::Separator();
             ImGui::TextWrapped("%s", renderer.c_str());
             ImGui::Spacing();
@@ -339,8 +396,11 @@ struct Application {
             if (ImGui::Button("Reset")) {
                 showTriangle = false;
                 scale = 1.0f;
+                pan = ImVec2(0, 0);
+                draggingPreview = false;
                 background[0] = 0.035f; background[1] = 0.045f; background[2] = 0.075f;
             }
+            ImGui::TextDisabled("Drag preview to move");
             ImGui::Separator();
             files.draw(window);
             ImGui::Separator();
@@ -359,9 +419,27 @@ struct Application {
             ImGui::Text("SDL %d / ImGui %s", SDL_GetVersion(), IMGUI_VERSION);
         }
         ImGui::End();
+        const bool overPreview = ImGui::IsMouseHoveringRect(previewMin, previewMax, false);
+        if (!showTriangle && overPreview && !io.WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            draggingPreview = true;
+            dragStartPan = pan;
+        }
+        if (showTriangle) draggingPreview = false;
+        if (draggingPreview) {
+            const auto delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0);
+            pan = ImVec2(dragStartPan.x+delta.x, dragStartPan.y+delta.y);
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) draggingPreview = false;
+        }
+        if (!showTriangle && (draggingPreview || (overPreview && !io.WantCaptureMouse)))
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+        if (smokeTest && frames == 43) {
+            check(std::fabs(pan.x-80) < 0.01f && std::fabs(pan.y-40) < 0.01f && !draggingPreview,
+                  "Preview mouse drag check failed");
+            pan = ImVec2(0, 0);
+        }
         spine->update(playing ? (smokeTest ? 1.0f / 60.0f : std::min(io.DeltaTime, 0.1f)) * speed : 0.0f);
         if (!showTriangle)
-            spine->draw(ImGui::GetBackgroundDrawList(), previewMin, previewMax, scale);
+            spine->draw(ImGui::GetBackgroundDrawList(), previewMin, previewMax, scale, pan);
         ImGui::Render();
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_BLEND);
@@ -414,11 +492,16 @@ struct Application {
         }
         check(glGetError() == GL_NO_ERROR, "OpenGL ES rendering error");
         checkEGL(eglSwapBuffers(display, surface), "eglSwapBuffers");
+        if (frames == 0 && initialPosition) {
+            // Activate the newly launched instance once its first frame is ready.
+            SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_RAISED, "1");
+            check(SDL_RaiseWindow(window), SDL_GetError());
+        }
         ++frames;
         if (smokeTest && frames == 12) check(SDL_SetWindowSize(window, 900, 600), SDL_GetError());
         if (smokeTest && frames == 32) showTriangle = false;
         if (smokeTest && frames == 64) {
-            std::puts("PASS: SDL3, ANGLE Metal, triangle, ImGui, resize, Spine 3.8 textured animation.");
+            std::puts("PASS: SDL3, ANGLE Metal, triangle, ImGui, resize, Spine " SPINE_RUNTIME_VERSION " textured animation.");
             return SDL_APP_SUCCESS;
         }
         SDL_Delay(1);
@@ -443,8 +526,32 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         app->smokeTest = argc > 1 && std::strcmp(argv[1], "--smoke-test") == 0;
         app->showRenderInfo = app->smokeTest;
         app->showTriangle = app->smokeTest;
+        if (app->smokeTest && argc != 2 && argc != 4)
+            throw std::runtime_error("Usage: --smoke-test [skeleton.json atlas.atlas]");
+        if (app->smokeTest && argc == 4) { app->smokeSkeleton = argv[2]; app->smokeAtlas = argv[3]; }
+        int firstFile = 1;
+        while (firstFile < argc && (std::strcmp(argv[firstFile], "--window-position") == 0 ||
+                                    std::strcmp(argv[firstFile], "--window-size") == 0)) {
+            if (argc-firstFile < 3) throw std::runtime_error("Window position/size requires two integers");
+            auto coordinate = [](const char *text) {
+                int value = 0;
+                const char *end = text + std::strlen(text);
+                const auto result = std::from_chars(text, end, value);
+                if (result.ec != std::errc{} || result.ptr != end)
+                    throw std::runtime_error("Invalid window position/size");
+                return value;
+            };
+            const int first = coordinate(argv[firstFile+1]), second = coordinate(argv[firstFile+2]);
+            if (std::strcmp(argv[firstFile], "--window-position") == 0) app->initialPosition = {first, second};
+            else {
+                if (first < 760 || second < 480)
+                    throw std::runtime_error("Window size must be at least 760 x 480");
+                app->windowWidth = first; app->windowHeight = second;
+            }
+            firstFile += 3;
+        }
         app->initialize();
-        if (argc > 1 && !app->smokeTest) for (int i = 1; i < argc; ++i) app->files.drop(argv[i]);
+        if (!app->smokeTest) for (int i = firstFile; i < argc; ++i) app->files.drop(argv[i]);
         return SDL_APP_CONTINUE;
     } catch (const std::exception &error) {
         return reportError(app, error);

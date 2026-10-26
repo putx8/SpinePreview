@@ -1,8 +1,7 @@
 #include "SpinePreview.h"
 #include <spine/spine.h>
 #include <GLES2/gl2.h>
-#include <CoreGraphics/CoreGraphics.h>
-#include <ImageIO/ImageIO.h>
+#include "PreviewTexture.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -14,9 +13,7 @@ SpineExtension *getDefaultExtension() { return new DefaultSpineExtension(); }
 }
 
 namespace {
-// ImageIO is the only platform-specific part of the initial texture loader.
-// It decodes into premultiplied RGBA, then converts to the straight alpha that
-// the ImGui shader expects. Use the sample's standard (not -pma) atlas.
+// Map runtime atlas pages to the shared texture loader.
 class TextureLoader final : public spine::TextureLoader {
 public:
     std::vector<TexturePage> pages;
@@ -24,56 +21,8 @@ public:
     void load(spine::AtlasPage &page, const spine::String &path) override {
         const auto found = std::find_if(pages.begin(), pages.end(), [&](const auto &p) { return p.name == page.name.buffer(); });
         const auto filename = found == pages.end() ? std::string(path.buffer()) : found->path.string();
-        CFURLRef url = CFURLCreateFromFileSystemRepresentation(nullptr,
-            reinterpret_cast<const UInt8 *>(filename.data()), filename.size(), false);
-        CGImageSourceRef source = url ? CGImageSourceCreateWithURL(url, nullptr) : nullptr;
-        if (url) CFRelease(url);
-        CGImageRef image = source ? CGImageSourceCreateImageAtIndex(source, 0, nullptr) : nullptr;
-        if (source) CFRelease(source);
-        if (!image) { error = std::string("Cannot decode atlas image: ") + filename; return; }
-        const size_t width = CGImageGetWidth(image), height = CGImageGetHeight(image);
-        GLint limit = 0;
-        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &limit);
-        if (!width || !height || width > static_cast<size_t>(limit) || height > static_cast<size_t>(limit)) {
-            CGImageRelease(image);
-            error = "Atlas texture dimensions exceed the GPU limit";
-            return;
-        }
-        std::vector<unsigned char> pixels(width * height * 4);
-        CGColorSpaceRef colors = CGColorSpaceCreateDeviceRGB();
-        CGContextRef bitmap = CGBitmapContextCreate(pixels.data(), width, height, 8, width * 4, colors,
-            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-        CGColorSpaceRelease(colors);
-        if (!bitmap) { CGImageRelease(image); error = "Cannot allocate atlas bitmap"; return; }
-        CGContextDrawImage(bitmap, CGRectMake(0, 0, width, height), image);
-        CGContextRelease(bitmap);
-        CGImageRelease(image);
-        const int passes = found != pages.end() && found->premultiplied ? 2 : 1;
-        for (int pass = 0; pass < passes; ++pass) for (size_t i = 0; i < pixels.size(); i += 4) {
-            const unsigned alpha = pixels[i + 3];
-            if (alpha) for (size_t c = 0; c < 3; ++c)
-                pixels[i + c] = static_cast<unsigned char>(std::min(255u, (pixels[i + c] * 255u + alpha / 2) / alpha));
-        }
-        GLuint texture = 0;
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        const bool mipmap = page.minFilter >= spine::TextureFilter_MipMap;
-        const GLenum minFilters[] = {GL_LINEAR, GL_NEAREST, GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR,
-            GL_NEAREST_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_NEAREST, GL_NEAREST_MIPMAP_LINEAR, GL_LINEAR_MIPMAP_LINEAR};
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilters[page.minFilter]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, page.magFilter == spine::TextureFilter_Nearest ? GL_NEAREST : GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, page.uWrap == spine::TextureWrap_Repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, page.vWrap == spine::TextureWrap_Repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(width), static_cast<GLsizei>(height),
-                     0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-        if (mipmap) glGenerateMipmap(GL_TEXTURE_2D);
-        if (glGetError() != GL_NO_ERROR) {
-            glDeleteTextures(1, &texture);
-            error = "Cannot upload atlas texture to ANGLE";
-            return;
-        }
-        page.width = static_cast<int>(width);
-        page.height = static_cast<int>(height);
+        const GLuint texture = loadPreviewTexture(filename, found != pages.end() && found->premultiplied,
+            page.minFilter, page.magFilter, page.uWrap, page.vWrap, error);
         page.setRendererObject(reinterpret_cast<void *>(static_cast<uintptr_t>(texture)));
     }
     void unload(void *object) override {
@@ -148,7 +97,7 @@ struct SpinePreview::Impl {
         if (!textures.error.empty()) throw std::runtime_error(textures.error);
         if (!atlas->getPages().size()) throw std::runtime_error("Atlas is empty");
         data = readSkeleton(files, atlas.get());
-        version = data->getVersion().buffer();
+        version = files.version;
         for (size_t i = 0; i < data->getAnimations().size(); ++i)
             animations.emplace_back(data->getAnimations()[i]->getName().buffer());
         for (size_t i = 0; i < data->getSkins().size(); ++i)
@@ -218,11 +167,11 @@ void SpinePreview::update(float delta) {
     impl->skeleton->updateWorldTransform();
 }
 
-void SpinePreview::draw(ImDrawList *list, ImVec2 minimum, ImVec2 maximum, float userScale) {
+void SpinePreview::draw(ImDrawList *list, ImVec2 minimum, ImVec2 maximum, float userScale, ImVec2 offset) {
     auto &s = *impl;
     const float zoom = 0.8f * userScale * std::min((maximum.x - minimum.x) / s.width,
                                                  (maximum.y - minimum.y) / s.height);
-    const float centerX = (minimum.x + maximum.x) * 0.5f, centerY = (minimum.y + maximum.y) * 0.5f;
+    const float centerX = (minimum.x + maximum.x) * 0.5f + offset.x, centerY = (minimum.y + maximum.y) * 0.5f + offset.y;
     list->PushClipRect(minimum, maximum, true);
     s.clipper.clipEnd();
     for (size_t slotIndex = 0; slotIndex < s.skeleton->getDrawOrder().size(); ++slotIndex) {

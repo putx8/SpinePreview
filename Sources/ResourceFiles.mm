@@ -270,6 +270,8 @@ ResourceFiles prepareResources(const fs::path &skeleton, const fs::path &atlas, 
     result.skeletonBytes = readFile(skeleton, 64*1024*1024);
     const auto filename = lower(skeleton.filename().string());
     result.binary = ends(filename, ".skel") || ends(filename, ".skel.bytes");
+    if (result.binary && std::string(SPINE_RUNTIME_VERSION) == "2.1")
+        throw std::runtime_error("Spine 2.1.25 C runtime supports JSON only; binary .skel files are not supported.");
     if (result.binary) {
         size_t offset = 0;
         binaryString(result.skeletonBytes, offset);
@@ -283,18 +285,35 @@ ResourceFiles prepareResources(const fs::path &skeleton, const fs::path &atlas, 
             if (![root isKindOfClass:[NSDictionary class]]) throw std::runtime_error("Invalid skeleton JSON");
             id bones = root[@"bones"];
             id metadata = root[@"skeleton"];
-            if (![bones isKindOfClass:[NSArray class]] || [bones count] == 0 ||
-                ![metadata isKindOfClass:[NSDictionary class]] || ![metadata[@"spine"] isKindOfClass:[NSString class]])
-                throw std::runtime_error("JSON is not a versioned Spine skeleton");
-            result.version = [metadata[@"spine"] UTF8String];
+            if (![bones isKindOfClass:[NSArray class]] || [bones count] == 0)
+                throw std::runtime_error("JSON is not a versioned Spine skeleton (missing bones)");
+            if ([metadata isKindOfClass:[NSDictionary class]] && [metadata[@"spine"] isKindOfClass:[NSString class]])
+                result.version = [metadata[@"spine"] UTF8String];
+            else if (!metadata || ([metadata isKindOfClass:[NSDictionary class]] && !metadata[@"spine"]))
+                result.version = "unknown (legacy)";
+            else throw std::runtime_error("Invalid skeleton version metadata");
+            // The 2.1 reader calls strlen(hash) unconditionally when metadata exists.
+            if (std::string(SPINE_RUNTIME_VERSION) == "2.1" && [metadata isKindOfClass:[NSDictionary class]]) {
+                NSMutableDictionary *legacyMetadata = [metadata mutableCopy];
+                if (!legacyMetadata[@"hash"]) legacyMetadata[@"hash"] = @"";
+                if (!legacyMetadata[@"spine"]) legacyMetadata[@"spine"] = @"";
+                if (![legacyMetadata[@"hash"] isKindOfClass:[NSString class]])
+                    throw std::runtime_error("Invalid skeleton hash metadata");
+                NSMutableDictionary *legacyRoot = [root mutableCopy];
+                legacyRoot[@"skeleton"] = legacyMetadata;
+                root = legacyRoot;
+            }
             // Re-encode valid JSON to remove BOM and embedded NUL ambiguities.
             NSData *normalized = [NSJSONSerialization dataWithJSONObject:root options:0 error:&error];
             result.skeletonBytes.assign(static_cast<const char *>(normalized.bytes), normalized.length);
         }
     }
-    if (result.version != "3.8" && result.version.compare(0, 4, "3.8.") != 0)
-        throw std::runtime_error("Resource version " + result.version + " is incompatible. This app supports Spine 3.8.");
-    if (result.version == "3.8.75") throw std::runtime_error("Spine runtime rejects 3.8.75. Re-export with a supported 3.8 patch version.");
+    const std::string runtime = SPINE_RUNTIME_VERSION;
+    if (result.version == "unknown (legacy)" || result.version == "Dev" || result.version.empty())
+        result.versionNotice = "Export version is " + (result.version.empty() ? std::string("unknown") : result.version) +
+            ". Trying Spine " + runtime + "; compatibility is not confirmed.";
+    else if (result.version != runtime && result.version.compare(0, runtime.size()+1, runtime+".") != 0)
+        result.versionNotice = "Export " + result.version + " differs from runtime " + runtime + ". Loading will still be attempted.";
     std::ostringstream normalized;
     uint64_t textureBytes = 0;
     for (const auto &page : parseAtlas(atlas)) {
@@ -305,7 +324,11 @@ ResourceFiles prepareResources(const fs::path &skeleton, const fs::path &atlas, 
         if (textureBytes > 512*1024*1024) throw std::runtime_error("Atlas textures exceed 512 MiB decoded limit");
         if (page.properties.count("size")) {
             const auto size = tuple(page.properties, "size", 2);
-            if (size[0] != width || size[1] != height) throw std::runtime_error("Atlas size does not match texture: " + page.name);
+            if (size[0] <= 0 || size[1] <= 0) throw std::runtime_error("Invalid atlas page size: " + page.name);
+            // The original 2.1 Cocos2d-x loader overwrites page dimensions with
+            // actual image pixels. Its Raptor sample declares 1022 for a 1024 PNG.
+            if (runtime != "2.1" && (size[0] != width || size[1] != height))
+                throw std::runtime_error("Atlas size does not match texture: " + page.name);
         }
         bool pma = lower(value(page.properties, "pma", "false")) == "true" || ends(stem(atlas), "-pma") || ends(stem(atlas), "_pma");
         if (alpha != AlphaMode::Auto) pma = alpha == AlphaMode::Premultiplied;
@@ -331,12 +354,12 @@ ResourceFiles prepareResources(const fs::path &skeleton, const fs::path &atlas, 
             auto rotation = lower(value(p, "rotate", "false"));
             if (rotation == "true") rotation = "90";
             if (rotation == "false") rotation = "0";
-            if (rotation != "0" && rotation != "90") throw std::runtime_error("Spine 3.8 preview supports atlas rotations 0 and 90 only");
+            if (rotation != "0" && rotation != "90") throw std::runtime_error("Spine preview supports atlas rotations 0 and 90 only");
             if (xy[0] < 0 || xy[1] < 0 || size[0] <= 0 || size[1] <= 0 || original[0] <= 0 || original[1] <= 0 ||
                 xy[0] + size[rotation == "90" ? 1 : 0] > width || xy[1] + size[rotation == "90" ? 0 : 1] > height)
                 throw std::runtime_error("Atlas region exceeds texture bounds: " + region.name);
             const auto index = tuple(p, "index", 1, {-1});
-            normalized << region.name << "\n  rotate: " << rotation << "\n  xy: " << xy[0] << ',' << xy[1]
+            normalized << region.name << "\n  rotate: " << (runtime == "2.1" ? (rotation == "90" ? "true" : "false") : rotation.c_str()) << "\n  xy: " << xy[0] << ',' << xy[1]
                        << "\n  size: " << size[0] << ',' << size[1];
             for (auto key : {"split", "pad"}) if (p.count(key)) {
                 const auto values = tuple(p, key, 4);

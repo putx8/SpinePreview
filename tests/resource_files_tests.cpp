@@ -125,9 +125,19 @@ int main(int argc, char **argv) {
             require(validate(executable, prepareResources(coin/"coin-pro.skel.bytes", coin/"coin.atlas")), "wrapped binary");
             require(validate(executable, prepareResources(coin/"coin-pro.json.txt", coin/"coin.atlas")), "wrapped JSON");
         });
-        test("incompatible runtime version rejected before parser", [&] {
-            auto json = tiny; json.replace(json.find("3.8.99"), 6, "4.2.00"); write(multi/"wrong.json", json);
-            rejects([&] { prepareResources(multi/"wrong.json", multi/"textures.atlas"); }, "incompatible");
+        test("version mismatch warns and still reaches the runtime parser", [&] {
+            for (const auto &version : {std::string("4.2.00"), std::string("Dev")}) {
+                auto json = tiny; json.replace(json.find("3.8.99"), 6, version); write(multi/"wrong.json", json);
+                const auto files = prepareResources(multi/"wrong.json", multi/"textures.atlas");
+                require(files.version == version && !files.versionNotice.empty(), "version notice preserves export version");
+                require(validate(executable, files), "compatible data is not blocked by its version label");
+            }
+            auto json = tiny; json.replace(json.find("3.8.99"), 6, "3.8.75"); write(multi/"wrong.json", json);
+            require(!validate(executable, prepareResources(multi/"wrong.json", multi/"textures.atlas")), "native parser rejection remains isolated");
+            json = tiny; json.erase(json.find("\"spine\":\"3.8.99\","), std::string("\"spine\":\"3.8.99\",").size());
+            write(multi/"unknown.json", json);
+            const auto unknown = prepareResources(multi/"unknown.json", multi/"textures.atlas");
+            require(!unknown.versionNotice.empty() && validate(executable, unknown), "missing export version warns and parses");
         });
         test("malformed and unrelated JSON rejected", [&] {
             write(multi/"bad.json", "{invalid");

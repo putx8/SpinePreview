@@ -11,7 +11,7 @@ struct TexturePage {
 };
 struct ResourceFiles {
     std::filesystem::path skeleton, atlas;
-    std::string skeletonBytes, atlasText, version;
+    std::string skeletonBytes, atlasText, version, versionNotice;
     std::vector<TexturePage> pages;
     AlphaMode alpha = AlphaMode::Auto;
     bool binary = false;

@@ -1,7 +1,7 @@
 #include "FileLoader.h"
 #include "SpinePreview.h"
 #include "imgui.h"
-#include <mach-o/dyld.h>
+#include "AppProcess.h"
 #include <algorithm>
 #include <array>
 #include <cstdio>
@@ -23,13 +23,6 @@ void SDLCALL fileDialogResult(void *, const char *const *paths, int) {
     dialogReady = true;
     if (!paths) dialogError = SDL_GetError();
     else for (size_t i = 0; paths[i]; ++i) dialogFiles.emplace_back(paths[i]);
-}
-std::string executablePath() {
-    uint32_t size = 0;
-    _NSGetExecutablePath(nullptr, &size);
-    std::vector<char> buffer(size);
-    if (_NSGetExecutablePath(buffer.data(), &size) != 0) throw std::runtime_error("Cannot locate validation worker");
-    return fs::weakly_canonical(buffer.data()).string();
 }
 std::string shortPath(const fs::path &path) {
     return (path.parent_path().filename()/path.filename()).string() + "##" + path.string();
@@ -92,7 +85,7 @@ struct FileLoader::Impl {
             stamps.clear();
             stamps.emplace_back(pending->skeleton); stamps.emplace_back(pending->atlas);
             for (const auto &page : pending->pages) stamps.emplace_back(page.path);
-            std::vector<std::string> arguments = {executablePath(), "--validate-resource",
+            std::vector<std::string> arguments = {applicationExecutablePath(), "--validate-resource",
                 pending->skeleton.string(), pending->atlas.string(), std::to_string(static_cast<int>(alpha))};
             for (const auto &page : pending->pages) { arguments.push_back(page.name); arguments.push_back(page.path.string()); }
             std::vector<const char *> pointers;
@@ -139,8 +132,10 @@ struct FileLoader::Impl {
         readOutput();
         SDL_DestroyProcess(process); process = nullptr;
         if (code != 0) {
+            const std::string notice = pending ? pending->versionNotice : "";
             pending.reset();
-            fail(processOutput.empty() ? "The Spine parser rejected this file (corrupt or truncated data). The previous animation was kept." : processOutput);
+            fail((notice.empty() ? "" : notice+"\n") + (processOutput.empty()
+                ? "The Spine parser rejected this file (corrupt or truncated data). The previous animation was kept." : processOutput));
         } else if (!std::all_of(stamps.begin(), stamps.end(), [](const auto &stamp) { return stamp.unchanged(); })) {
             pending.reset(); fail("Files changed during validation. Reload to try again.");
         } else { ready = std::move(pending); pending.reset(); }
@@ -180,7 +175,7 @@ void FileLoader::failed(const std::string &message) { impl->fail(message); }
 void FileLoader::loaded(const ResourceFiles &files) {
     ResourceFiles summary;
     summary.skeleton = files.skeleton; summary.atlas = files.atlas;
-    summary.version = files.version; summary.pages = files.pages;
+    summary.version = files.version; summary.versionNotice = files.versionNotice; summary.pages = files.pages;
     summary.alpha = files.alpha; summary.binary = files.binary;
     impl->current = std::move(summary);
     impl->message = "Loaded " + files.skeleton.filename().string() + " | " + std::to_string(files.pages.size()) + " texture page(s)";
@@ -248,6 +243,12 @@ void FileLoader::draw(SDL_Window *window) {
         }
     }
     ImGui::TextWrapped("Drop .json / .skel, Atlas, images, or a folder");
+    const auto *resource = s.pending ? &*s.pending : (s.current ? &*s.current : nullptr);
+    if (resource && !resource->versionNotice.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1));
+        ImGui::TextWrapped("%s", resource->versionNotice.c_str());
+        ImGui::PopStyleColor();
+    }
     if (!s.message.empty()) {
         if (s.error) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.45f, 0.35f, 1));
         ImGui::TextWrapped("%s", s.message.c_str());
