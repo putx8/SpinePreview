@@ -16,7 +16,7 @@ git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin v1.0.0
 ```
 
-创建本地 tag 不会触发 GitHub，推送 tag 后才会运行。源码包来自该 tag 对应提交，不包含本地未提交文件、Git 元数据或构建目录。
+创建本地 tag 不会触发 GitHub，推送 tag 后才会运行。若自动触发未启动，或需要对已有 tag 重跑，可在 Actions → Release → Run workflow 输入已有 tag，也可以运行 `gh workflow run release.yml --ref main -f tag=v0.0.1`。手动入口仍检出该 tag 的源码，不改变 tag 指向。源码包来自该 tag 对应提交，不包含本地未提交文件、Git 元数据或构建目录。
 
 ## 发布附件
 
