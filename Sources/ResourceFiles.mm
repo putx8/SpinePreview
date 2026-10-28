@@ -274,7 +274,10 @@ ResourceFiles prepareResources(const fs::path &skeleton, const fs::path &atlas, 
         throw std::runtime_error("Spine 2.1.25 C runtime supports JSON only; binary .skel files are not supported.");
     if (result.binary) {
         size_t offset = 0;
-        binaryString(result.skeletonBytes, offset);
+        if (std::string(SPINE_RUNTIME_VERSION) == "4.0") {
+            if (result.skeletonBytes.size() < 8) throw std::runtime_error("Truncated skeleton binary header");
+            offset = 8;
+        } else binaryString(result.skeletonBytes, offset);
         result.version = binaryString(result.skeletonBytes, offset);
         if (result.skeletonBytes.size()-offset < 17) throw std::runtime_error("Truncated skeleton binary");
     } else {

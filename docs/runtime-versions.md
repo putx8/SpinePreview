@@ -35,3 +35,7 @@
 ## 验证
 
 3.8 继续运行原有 21 场景资源回归测试；2.1 增加旧 JSON、带版本 JSON、官方 Dev Raptor、2.1.15、无动画、旋转、多页/PMA、改名配对、版本不匹配提示及继续解析、二进制拒绝、缺失 region、普通/加权 Mesh、错误索引及隔离进程测试。两个应用各自运行真实窗口 `--smoke-test`，验证 ANGLE Metal、三角形、UI、窗口缩放、折叠布局、动画/皮肤切换、时间恢复、暂停、非循环结束姿势和纹理动画帧变化。
+
+## Spine 4.0
+
+已加入独立 `Spine40.cpp` 适配层与离线 `Vendor/Spine40` 依赖，生成 `SpinePreview4.0.app`，Bundle ID 为 `local.spinepreview.v40`。JSON、二进制使用 4.0 runtime，共用界面、资源配对、PMA、拖动与多实例；默认构建和发布打包包含全部三个版本。

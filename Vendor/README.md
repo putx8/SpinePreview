@@ -31,3 +31,5 @@ Spine 从指定提交原样提取 `spine-cpp/`、`examples/spineboy/export/`、�
 Spine 2.1.25 使用 `git archive` 从上述固定提交原样提取完整 `spine-c/`、根目录 `LICENSE` 和 `README.md`，另附 `Spine21/commit.txt`。头文件位于 `spine-c/include/spine/`，实现位于 `spine-c/src/spine/`，官方 Spineboy 示例位于 `spine-c/data/`。未修改上游实现或外部仓库的检出状态。该依赖静态编译进 `SpinePreview2.1.app`；原始许可证单独保留在 `Spine21/LICENSE`，打包时复制到 2.1 应用的 `Contents/Resources/Licenses/Spine.txt`。
 
 2.1 回归测试另从同一固定提交原样提取 `spine-cocos2dx/3/example/Resources/common/raptor.json`、`raptor.atlas`、`raptor.png`。该官方示例的导出版本字段是 `Dev`，不应据此推断具体补丁版本。
+
+Spine 4.0：从本机 spine-runtimes 的 `origin/4.0` 固定提交 `425ce416bb218b28caeec47b317aa57cd7140375` 原样提取 `spine-cpp/`、`examples/spineboy/export/`、根 `LICENSE` 和 `README.md`，记录于 `Spine40/commit.txt`。源码未修改，保留该版本许可证；静态构建独立的 `SpinePreview4.0.app`，未切换外部仓库检出状态。

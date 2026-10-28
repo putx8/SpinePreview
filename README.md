@@ -2,7 +2,7 @@
 
 项目起因是在 Apple Silicon Mac 上启动旧版 Spine Skeleton Viewer 时，遇到缺少 ARM64 原生库或原生库架构不匹配，无法进入预览界面。因此构建轻量的原生动画预览应用，按 Spine runtime 版本分别发布，并保留离线构建能力。脱敏后的报错与背景见 [项目初衷](docs/project-background.md)。
 
-使用 SDL3 管理窗口和输入，Dear ImGui 绘制控制面板，通过用户提供的 Google ANGLE，以 OpenGL ES 2.0 绘制 Spine 2.1 / 3.8 动画和 UI。保留 RGB 三角形作为渲染测试模式。渲染路径：
+使用 SDL3 管理窗口和输入，Dear ImGui 绘制控制面板，通过用户提供的 Google ANGLE，以 OpenGL ES 2.0 绘制 Spine 2.1 / 3.8 / 4.0 动画和 UI。保留 RGB 三角形作为渲染测试模式。渲染路径：
 
 `SDL3 window → SDL_MetalView / CAMetalLayer → EGL → ANGLE OpenGL ES → Metal`
 
@@ -18,9 +18,10 @@ ImGui 使用 `imgui_impl_sdl3` 输入后端及定义了 `IMGUI_IMPL_OPENGL_ES2` 
 bash scripts/build.sh
 open "build/SpinePreview2.1.app"
 open "build/SpinePreview3.8.app"
+open "build/SpinePreview4.0.app"
 ```
 
-默认同时生成 `SpinePreview2.1.app` 和 `SpinePreview3.8.app`，两者具有独立 Bundle ID，可同时运行。产物为 arm64 / x86_64 Universal `.app`，内置两份 ANGLE 动态库，采用本地 ad-hoc 签名。可直接在本机双击运行；面向其他用户正式分发时需要 Developer ID 签名和公证。
+默认同时生成 `SpinePreview2.1.app` 、`SpinePreview3.8.app` 和 `SpinePreview4.0.app`，两者具有独立 Bundle ID，可同时运行。产物为 arm64 / x86_64 Universal `.app`，内置两份 ANGLE 动态库，采用本地 ad-hoc 签名。可直接在本机双击运行；面向其他用户正式分发时需要 Developer ID 签名和公证。
 
 使用 `SPINE_VERSION=2.1 bash scripts/build.sh` 或 `SPINE_VERSION=3.8 bash scripts/build.sh` 可只构建对应版本。默认同时构建 arm64 / x86_64；可用 `BUILD_JOBS=4 bash scripts/build.sh` 调整并行编译数。目前交付及验证的是 macOS 版本，Windows/Linux 平台接入尚未实现，CMake 会明确提示。
 
@@ -56,7 +57,7 @@ open "build/SpinePreview3.8.app"
 
 从本机 `~/Documents/repos/spine-runtimes` 的 `origin/3.8` 提取 spine-cpp 和官方 Spineboy 导出示例，固定提交为 `8b4844bd4b193ba9e54487ed397a777993cbad56`。源码随仓库保存在 `Vendor/Spine38/`，静态编译进应用，无需外部仓库或网络；导入使用 `git archive`，不切换或修改外部仓库的检出状态。
 
-应用包和 Bundle ID 分别为 `SpinePreview3.8.app`、`local.spinepreview.v38`，与 2.1 应用分别命名，可并存安装。示例导出版本为 3.8.55，包含 11 个动画。CMake 的 `SPINE_VERSION` 接受 `all`（默认）、`2.1`、`3.8`。
+应用包和 Bundle ID 分别为 `SpinePreview3.8.app`、`local.spinepreview.v38`，与 2.1 应用分别命名，可并存安装。示例导出版本为 3.8.55，包含 11 个动画。CMake 的 `SPINE_VERSION` 接受 `all`（默认）、`2.1`、`3.8`、`4.0`。
 
 PNG 纹理解码暂由 macOS ImageIO 完成，转换为 ImGui shader 使用的 straight-alpha RGBA；几何图形通过 ImGui draw list 提交，实际绘制仍使用 ANGLE。Spine runtime 的原始许可证随源码及应用保留，授权条款见 `Vendor/Spine38/LICENSE`。
 
@@ -64,15 +65,21 @@ PNG 纹理解码暂由 macOS ImageIO 完成，转换为 ImGui shader 使用的 s
 
 Spine 2.1.25 的 C runtime 离线保存在 `Vendor/Spine21/`，固定提交 `142e770e5b4b42395a3a0a68ff3c8a21ba2774eb`，应用内置该版本的官方 Spineboy 示例（8 个动画）。
 
-两个应用共用 `main.cpp`、`FileLoader.*`、`ResourceFiles.*` 和纹理加载器。`SpinePreview.h` 定义统一接口，构建时选择 `Sources/Runtimes/Spine21.cpp` 或 `Spine38.cpp`；每个应用只链接自己的 runtime，分别打包对应示例与许可证。多版本维护及接入差异见 [runtime 版本方案](docs/runtime-versions.md)。
+三个应用共用 `main.cpp`、`FileLoader.*`、`ResourceFiles.*` 和纹理加载器。`SpinePreview.h` 定义统一接口，构建时选择 `Sources/Runtimes/Spine21.cpp` 或 `Spine38.cpp`；每个应用只链接自己的 runtime，分别打包对应示例与许可证。多版本维护及接入差异见 [runtime 版本方案](docs/runtime-versions.md)。
 
 ## 应用图标
 
-两个 runtime 应用共用骨骼关节与播放符号图标。资源保存在 `Assets/AppIcon/`：原始生成图、1024×1024 PNG、完整尺寸的 macOS ICNS 和生成提示词。构建直接使用仓库中的 ICNS；更换原图后可运行 `bash scripts/build-icon.sh` 通过 macOS 系统工具重新生成，无需在线生成服务。
+各 runtime 应用共用骨骼关节与播放符号图标。资源保存在 `Assets/AppIcon/`：原始生成图、1024×1024 PNG、完整尺寸的 macOS ICNS 和生成提示词。构建直接使用仓库中的 ICNS；更换原图后可运行 `bash scripts/build-icon.sh` 通过 macOS 系统工具重新生成，无需在线生成服务。
 
 ## GitHub 自动发布
 
 推送 `v1.0.0` 这类版本 tag 后，GitHub Actions 自动构建并发布 `SpinePreview2.1`、`SpinePreview3.8` 的 macOS Universal ZIP，以及包含离线依赖的 ZIP / TAR.GZ 源码包和 SHA-256 校验文件。预发布 tag（如 `v1.1.0-rc.1`）生成 Prerelease。详细设置、发布步骤与失败重试见 [发布文档](docs/releasing.md)。
+
+## Spine 4.0 runtime
+
+离线源码位于 `Vendor/Spine40/`，固定提交 `425ce416bb218b28caeec47b317aa57cd7140375`。`Sources/Runtimes/Spine40.cpp` 使用独立 runtime 实现统一预览接口，支持 JSON、二进制、Region/Mesh 和裁剪，沿用现有混合、PMA、拖动、动画/皮肤切换和多实例功能；双颜色 tint 仍未接入。
+
+默认构建额外生成 `SpinePreview4.0.app`，也可使用 `SPINE_VERSION=4.0 bash scripts/build.sh` 单独构建。发布流程会同时打包 2.1、3.8、4.0。4.0 的二进制使用 8 字节 hash 头，与 3.8 分开处理。新增资源回归测试验证官方 Essential/Professional 的 JSON、二进制、包装文件名、PMA、纹理缺失和损坏二进制隔离。
 
 ## 验证
 

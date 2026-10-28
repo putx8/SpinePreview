@@ -8,7 +8,7 @@ import plistlib
 import re
 import subprocess
 
-RUNTIMES = ("2.1", "3.8")
+RUNTIMES = ("2.1", "3.8", "4.0")
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
 
 
@@ -73,10 +73,11 @@ def package(root, tag, revision, output):
 
 - `SpinePreview2.1-{tag}-macos-universal.zip`: Spine 2.1.25 C runtime (JSON only).
 - `SpinePreview3.8-{tag}-macos-universal.zip`: Spine 3.8 runtime (JSON and binary).
+- `SpinePreview4.0-{tag}-macos-universal.zip`: Spine 4.0 runtime (JSON and binary).
 - `SpinePreview-{tag}-source.zip` / `.tar.gz`: source from commit `{commit}`, including bundled dependencies and licenses for offline builds.
-- `SHA256SUMS`: SHA-256 checksums of all four archives.
+- `SHA256SUMS`: SHA-256 checksums of all application and source archives.
 
-Requires macOS 12 or later. Both apps include ARM64 and x86_64 code and use ANGLE Metal.
+Requires macOS 12 or later. All apps include ARM64 and x86_64 code and use ANGLE Metal.
 Applications use ad-hoc signatures; Developer ID signing and Apple notarization are not configured.
 Application release version: `{info['version']}`. Runtime versions are independent of the application release tag.
 """)

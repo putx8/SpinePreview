@@ -26,19 +26,20 @@ git push origin v1.0.0
 | --- | --- |
 | `SpinePreview2.1-v1.0.0-macos-universal.zip` | `SpinePreview2.1.app`，Spine 2.1.25 C runtime，仅支持 JSON |
 | `SpinePreview3.8-v1.0.0-macos-universal.zip` | `SpinePreview3.8.app`，Spine 3.8 runtime，支持 JSON / 二进制 |
+| `SpinePreview4.0-v1.0.0-macos-universal.zip` | `SpinePreview4.0.app`，Spine 4.0 runtime，支持 JSON / 二进制 |
 | `SpinePreview-v1.0.0-source.zip` | 完整项目源码、离线依赖和许可证 |
 | `SpinePreview-v1.0.0-source.tar.gz` | 同一提交的 TAR.GZ 源码包 |
-| `SHA256SUMS` | 上述四个压缩包的 SHA-256 校验值 |
+| `SHA256SUMS` | 上述五个压缩包的 SHA-256 校验值 |
 
-两个应用均为 ARM64 / x86_64 Universal，最低 macOS 12，使用 ANGLE Metal。ZIP 保留 `.app` 包结构和文件权限，解压后可得到独立应用。当前采用 ad-hoc 签名，尚未配置 Developer ID 签名和 Apple 公证。
+三个应用均为 ARM64 / x86_64 Universal，最低 macOS 12，使用 ANGLE Metal。ZIP 保留 `.app` 包结构和文件权限，解压后可得到独立应用。当前采用 ad-hoc 签名，尚未配置 Developer ID 签名和 Apple 公证。
 
-应用发布版本与 Spine runtime 版本独立：例如 `v1.2.3-rc.1` 发布的两个应用仍分别叫 `SpinePreview2.1.app`、`SpinePreview3.8.app`。`CFBundleShortVersionString` 为 `1.2.3`，完整版本写入 `SpinePreviewReleaseVersion`，`CFBundleVersion` 使用 GitHub Actions 的运行序号。
+应用发布版本与 Spine runtime 版本独立：例如 `v1.2.3-rc.1` 发布的三个应用仍分别叫 `SpinePreview2.1.app`、`SpinePreview3.8.app`。`CFBundleShortVersionString` 为 `1.2.3`，完整版本写入 `SpinePreviewReleaseVersion`，`CFBundleVersion` 使用 GitHub Actions 的运行序号。
 
 ## 自动流程
 
-1. 在固定 `macos-15` runner 上检出 tag 提交，验证 tag 和发布脚本。
-2. 使用仓库内依赖构建两个 Universal 应用，分别附带对应 runtime 示例与许可证，并执行本地 ad-hoc 签名。
-3. 运行两个 runtime 的资源回归测试。打包时再次验证应用签名，以及可执行文件和 ANGLE 库都包含 ARM64 / x86_64。
+1. 默认在固定 `macos-15-intel` runner 上检出 tag 提交，验证 tag 和发布脚本。
+2. 使用仓库内依赖构建三个 Universal 应用，分别附带对应 runtime 示例与许可证，并执行本地 ad-hoc 签名。
+3. 运行三个 runtime 的资源回归测试。打包时再次验证应用签名，以及可执行文件和 ANGLE 库都包含 ARM64 / x86_64。
 4. 使用 `ditto` 打包应用，使用 `git archive` 导出源码，生成校验文件、内部 manifest 和发布说明。
 5. 把完整发布包作为 Actions artifact 保存 14 天；在独立发布 job 校验附件完整性后创建 Release 草稿，上传全部附件，最后发布。
 
@@ -67,7 +68,7 @@ python3 scripts/release.py verify --tag v1.0.0 --output build/release-local
 
 输出目录需要为空，避免混入旧版本附件。`--revision HEAD` 只用于从当前提交试打包；正式 workflow 使用 tag 对应的提交 SHA。未提交的源码改动不会进入源码压缩包。
 
-下载后的校验方法：在四个压缩包和 `SHA256SUMS` 所在目录运行 `shasum -a 256 -c SHA256SUMS`。
+下载后的校验方法：在五个压缩包和 `SHA256SUMS` 所在目录运行 `shasum -a 256 -c SHA256SUMS`。
 
 ## 参考
 
